@@ -7,7 +7,6 @@ namespace Extensions {
 namespace UdpFilters {
 namespace UdpProxy {
 
-// TODO(mattklein123): Logging
 // TODO(mattklein123): Stats
 
 void UdpProxyFilter::onData(Network::UdpRecvData& data) {
@@ -41,9 +40,11 @@ UdpProxyFilter::ActiveSession::ActiveSession(UdpProxyFilter& parent,
                                              Network::UdpRecvData::LocalPeerAddresses&& addresses,
                                              const Upstream::HostConstSharedPtr& host)
     : parent_(parent), addresses_(std::move(addresses)), host_(host),
+      idle_timer_(parent.read_callbacks_->udpListener().dispatcher().createTimer(
+          [this] { onIdleTimer(); })),
       // NOTE: The socket call can only fail due to memory/fd exhaustion. No local ephemeral port
       //       is bound until the first packet is sent to the upstream host.
-      io_handle_(host->address()->socket(Network::Address::SocketType::Datagram)),
+      io_handle_(parent.createIoHandle(host)),
       socket_event_(parent.read_callbacks_->udpListener().dispatcher().createFileEvent(
           io_handle_->fd(), [this](uint32_t) { onReadReady(); }, Event::FileTriggerType::Edge,
           Event::FileReadyType::Read)) {
@@ -57,8 +58,12 @@ UdpProxyFilter::ActiveSession::ActiveSession(UdpProxyFilter& parent,
   // handle.
 }
 
+void UdpProxyFilter::ActiveSession::onIdleTimer() { parent_.sessions_.erase(addresses_); }
+
 void UdpProxyFilter::ActiveSession::onReadReady() {
   // TODO(mattklein123): Refresh idle timer.
+  // TODO(mattklein123): We should not be passing *addresses_.local_ to this function as we are
+  //                     not trying to populate the local address for received packets.
   uint32_t packets_dropped = 0;
   const Api::IoErrorPtr result = Network::Utility::readPacketsFromSocket(
       *io_handle_, *addresses_.local_, *this, parent_.config_->timeSource(), packets_dropped);
@@ -68,8 +73,8 @@ void UdpProxyFilter::ActiveSession::onReadReady() {
 }
 
 void UdpProxyFilter::ActiveSession::write(const Buffer::Instance& buffer) {
-  ENVOY_LOG(trace, "writing {} byte datagram: downstream={} local={} upstream={}", buffer.length(),
-            addresses_.peer_->asStringView(), addresses_.local_->asStringView(),
+  ENVOY_LOG(trace, "writing {} byte datagram upstream: downstream={} local={} upstream={}",
+            buffer.length(), addresses_.peer_->asStringView(), addresses_.local_->asStringView(),
             host_->address()->asStringView());
 
   // TODO(mattklein123): Refresh idle timer.
@@ -86,6 +91,9 @@ void UdpProxyFilter::ActiveSession::write(const Buffer::Instance& buffer) {
 void UdpProxyFilter::ActiveSession::processPacket(Network::Address::InstanceConstSharedPtr,
                                                   Network::Address::InstanceConstSharedPtr,
                                                   Buffer::InstancePtr buffer, MonotonicTime) {
+  ENVOY_LOG(trace, "writing {} byte datagram downstream: downstream={} local={} upstream={}",
+            buffer->length(), addresses_.peer_->asStringView(), addresses_.local_->asStringView(),
+            host_->address()->asStringView());
   Network::UdpSendData data{addresses_.local_->ip(), *addresses_.peer_, *buffer};
   const Api::IoCallUint64Result rc = parent_.read_callbacks_->udpListener().send(data);
   // TODO(mattklein123): Increment stat on failure.

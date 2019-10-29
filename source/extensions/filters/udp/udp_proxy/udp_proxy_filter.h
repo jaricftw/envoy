@@ -60,6 +60,7 @@ private:
     void write(const Buffer::Instance& buffer);
 
   private:
+    void onIdleTimer();
     void onReadReady();
 
     // Network::UdpPacketProcessor
@@ -76,6 +77,7 @@ private:
     UdpProxyFilter& parent_;
     const Network::UdpRecvData::LocalPeerAddresses addresses_;
     const Upstream::HostConstSharedPtr host_;
+    const Event::TimerPtr idle_timer_;
     // The IO handle is used for writing packets to the selected upstream host as well as receiving
     // packets from the upstream host. Note that a a local ephemeral port is bound on the first
     // write to the upstream host.
@@ -115,6 +117,11 @@ private:
       return lhs->addresses() == rhs->addresses();
     }
   };
+
+  virtual Network::IoHandlePtr createIoHandle(const Upstream::HostConstSharedPtr& host) {
+    // Virtual so this can be overridden in unit tests.
+    return host->address()->socket(Network::Address::SocketType::Datagram);
+  }
 
   const UdpProxyFilterConfigSharedPtr config_;
   absl::flat_hash_set<ActiveSessionPtr, HeterogeneousActiveSessionHash,
