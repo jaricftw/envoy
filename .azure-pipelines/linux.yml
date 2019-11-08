@@ -42,8 +42,6 @@ jobs:
   strategy:
     maxParallel: 3
     matrix:
-      release:
-        CI_TARGET: 'bazel.release'
       asan:
         CI_TARGET: 'bazel.asan'
       tsan:
@@ -58,6 +56,8 @@ jobs:
       # (on Fuzzit) is not crashing envoy. This will help find bugs BEFORE merging and not after.
       fuzzit:
         CI_TARGET: 'bazel.fuzzit'
+      release:
+        CI_TARGET: 'bazel.release'
   timeoutInMinutes: 360
   pool:
     vmImage: 'Ubuntu 16.04'
